@@ -1,0 +1,5 @@
+File chunking on the server.
+Assigning sequence numbers.
+
+Sending chunks back to the client.
+Assembling on client side.

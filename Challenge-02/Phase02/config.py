@@ -1,0 +1,3 @@
+CHUNK_SIZE = 1024  # Bytes
+SERVER_HOST = 'localhost'
+SERVER_PORT = 5001

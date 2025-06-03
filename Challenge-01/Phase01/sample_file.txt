@@ -1,0 +1,1804 @@
+fields that are being used by downstream consumers. Similarly, you must also be careful
+when modifying the triggering logic. It is far more common to change the data
+definition than the triggering mechanism, as altering the latter often breaks the
+meaning of the original event definition.
+Using Explicit Schemas as Contracts
+The best way to enforce data contracts and provide consistency is to define a schema
+for each event. The producer defines an explicit schema detailing the data definition
+and the triggering logic, with all events of the same type adhering to this format. In
+doing so, the producer provides a mechanism for communicating its event format to
+all prospective consumers. The consumers, in turn, can confidently build their microservice
+business logic against the schematized data.
+Any implementation of event-based communication between a
+producer and consumer that lacks an explicit predefined schema
+will inevitably end up relying on an implicit schema. Implicit data
+contracts are brittle and susceptible to uncontrolled change, which
+can cause much undue hardship to downstream consumers.
+A consumer must be able to extract the data necessary for its business processes, and
+it cannot do that without having a set of expectations about what data should be
+available. Consumers must often rely on tribal knowledge and interteam communication
+to resolve data issues, a process that is not scalable as the number of event
+streams and teams increases. There is also substantial risk in requiring each consumer
+to independently interpret the data, as a consumer may interpret it differently
+than its peers, which leads to inconsistent views of the single source of truth.
+It may be tempting to build a common library that interprets any
+given event for all services, but this creates problems with multiple
+language formats, event evolutions, and independent release cycles.
+Duplicating efforts across services to ensure a consistent view of
+implicitly defined data is nontrivial and best avoided completely.
+Producers are also at a disadvantage with implicit schemas. Even with the best of
+intentions, a producer may not notice (or perhaps their unit tests don’t reveal) that
+they have altered their event data definition. Without an explicit check of their service’s
+event format, this situation may go unnoticed until it causes downstream consumers
+to fail. Explicit schemas give security and stability to both consumers and
+producers.
+40 | Chapter 3: Communication and Data Contracts
+
+Use the Narrowest Data Types
+Use the narrowest types for your event data. This lets you rely on the code generators,
+language type checking (if supported), and serialization unit tests to check the
+boundaries of your data. It sounds simple, but there are many cases where ambiguity
+can creep in when you don’t use the proper types. Here are a few easily avoidable realworld
+examples:
+Using string to store a numeric value
+This requires the consumer to parse and convert the string to a numeric value
+and often comes up with GPS coordinates. This is error prone and subject to failures,
+especially when a null value or an empty string is sent.
+Using integer as a boolean
+While 0 and 1 can be used to denote false and true, respectively, what does 2
+mean? How about -1?
+Using string as an enum
+This is problematic for producers, as they must ensure that their published values
+match an accepted pseudo-enum list. Typos and incorrect values will inevitably
+be introduced. A consumer interested in this field will need to know the range of
+possible values, and this will require talking to the producing team, unless it’s
+specified in the comments of the schema. In either case, this is an implicit definition,
+since the producers are not guarded against any changes to the range of values
+in the string. This whole approach is simply bad practice.
+Enums are often avoided because producers fear creating a new enum token that isn’t
+present in the consumer’s schema. However, the consumer has a responsibility to
+consider enum tokens that it does not recognize, and determine if it should process
+them using a default value or simply throw a fatal exception and halt processing until
+someone can work out what needs to be done. Both Protobuf and Avro have elegant
+ways of handling unknown enum tokens and should be used if either is selected for
+your event format.
+Keep Events Single-Purpose
+One common anti-pattern is adding a type field to an event definition, where different
+type values indicate specific subfeatures of the event. This is generally done for
+data that is “similar yet different” and is often a result of the implementer incorrectly
+identifying the events as single-purpose. Though it may seem like a time-saving
+measure or a simplification of a data access pattern, overloading events with type
+parameters is rarely a good idea.
+There are several problems with this approach. Each type parameter value usually
+has a fundamentally different business meaning, even if its technical representation is
+Designing Events | 47
+Converting Liberated Data to Events
+Liberated data, much like any other event, is subject to the same recommendations of
+schematization that were introduced in Chapter 3. One of the properties of a welldefined
+event stream is that there is an explicitly defined and evolutionarily compatible
+schema for the events it contains. You should ensure that consumers have basic
+data quality guarantees as part of the data contract defined by the schema. Changes to
+the schema can only be made according to evolutionary rules.
+Use the same standard format for both liberated event data and
+native event data across your organization.
+By definition, the data that is most relevant and used across the business is the data
+that is most necessary to liberate. Changes made to the data definitions of the source,
+such as creating new fields, altering existing ones, or dropping others, can result in
+dynamically changing data being propagated downstream to consumers. Failing to
+use an explicitly defined schema for liberated data will force downstream consumers
+to resolve any incompatibilities. This is extremely problematic for the provision of the
+single source of truth, as downstream consumers should not be attempting to parse
+or interpret data on their own. It is extremely important to provide a reliable and upto-
+date schema of the produced data and to carefully consider the evolution of the
+data over time.
+Data Liberation Patterns
+There are three main data liberation patterns that you can use to extract data from the
+underlying data store. Since liberated data is meant to form the new single source of
+truth, it follows that it must contain the entire set of data from the data store. Additionally,
+this data must be kept up to date with new insertions, updates, and deletes.
+Query-based
+You extract data by querying the underlying state store. This can be performed
+on any data store.
+Log-based
+You extract data by following the append-only log for changes to the underlying
+data structures. This option is available only for select data stores that maintain a
+log of the modifications made to the data.
+Table-based
+In this pattern, you first push data to a table used as an output queue. Another
+thread or separate process queries the table, emits the data to the relevant event
+Data Liberation Patterns | 57
+stream, and then deletes the associated entries. This method requires that the
+data store support both transactions and an output queue mechanism, usually a
+standalone table configured for use as a queue.
+While each pattern is unique, there is one commonality among the three. Each
+should produce its events in sorted timestamp order, using the source record’s most
+recent updated_at time in its output event record header. This will generate an event
+stream timestamped according to the event’s occurrence, not the time that the producer
+published the event. This is particularly important for data liberation, as it
+accurately represents when events actually happened in the workflow. Timestampbased
+interleaving of events is discussed further in Chapter 6.
+Data Liberation Frameworks
+One method of liberating data involves the usage of a dedicated, centralized framework
+to extract data into event streams. Examples of centralized frameworks for capturing
+event streams include Kafka Connect (exclusively for the Kafka platform),
+Apache Gobblin, and Apache NiFi. Each framework allows you to execute a query
+against the underlying data set with the results piped through to your output event
+streams. Each option is also scalable, such that you can add further instances to
+increase the capacity for executing change-data capture (CDC) jobs. They support
+various levels of integration with the schema registry offered by Confluent (Apache
+Kafka), but customization can certainly be performed to support other schema registries.
+See “Schema Registry” on page 241 for more information.
+Not all data liberation processes require a dedicated framework, and many systems
+are better suited to taking direct ownership of their own event stream data production.
+In fact, these frameworks inadvertently encourage data access anti-patterns. One
+of the most common anti-patterns is the exposure of internal data models to external
+systems, further increasing coupling instead of decreasing it, as is one of the major
+benefits of event-driven architectures. This will be covered further in the remainder
+of the chapter.
+Liberating Data by Query
+Query-based data liberation involves querying the data store and emitting selected
+results to an associated event stream. A client is used to request the specific data set
+from the data store using the appropriate API, SQL, or SQL-like language. A data set
+must be bulk-queried to provide the history of events. Periodic updates then follow,
+ensuring that changes are produced to the output event stream.
+There are several types of queries used in this pattern.
+58 | Chapter 4: Integrating Event-Driven Architectures with Existing Systems
+Bulk Loading
+Bulk loading queries and loads all of the data from the data set. Bulks loads are performed
+when the entire table needs to be loaded at each polling interval, as well as
+prior to ongoing incremental updates.
+Bulk loading can be expensive, as it requires obtaining the entire data set from the
+data store. For smaller data sets this tends not to be a problem, but large data sets,
+especially those with millions or billions of records, may be difficult to obtain. For
+querying and processing very large data sets I recommend you research best practices
+for your particular data store, since these can vary significantly with implementation.
+Incremental Timestamp Loading
+With incremental timestamp loading, you query and load all data since the highest
+timestamp of the previous query’s results. This approach uses an updated-at column
+or field in the data set that keeps track of the time when the record was last modified.
+During each incremental update, only records with updated-at timestamps later
+than the last processed time are queried.
+Autoincrementing ID Loading
+Autoincrementing ID loading involves querying and loading all data larger than the
+last value of the ID. This requires a strictly ordered autoincrementing Integer or
+Long field. During each incremental update, only records with an ID larger than the
+last processed ID are queried. This approach is often used for querying tables with
+immutable records, such as when using the outbox tables (see “Liberating Data Using
+Change-Data Capture Logs” on page 61).
+Custom Querying
+A custom query is limited only by the client querying language. This approach is
+often used when the client requires only a certain subset of data from a larger data set,
+or when joining and denormalizing data from multiple tables to avoid over-exposure
+of the internal data model. For instance, a user could filter business partner data
+according to a specific field, where each partner’s data is sent to its own event stream.
+Incremental Updating
+The first step of any incremental update is to ensure that the necessary timestamp or
+autoincrementing ID is available in the records of your data set. There must be a field
+that the query can use to filter out records it has already processed from those it has
+yet to process. Data sets that lack these fields will need to have them added, and the
+data store will need to be configured to populate the necessary updated_at
+Liberating Data by Query | 59
+Drawbacks of Query-Based Updating
+There are some downsides to query-based updating as well:
+Required updated-at timestamp
+The underlying table or namespace of events to query must have a column containing
+their updated-at timestamp. This is essential for tracking the last update
+time of the data and for making incremental updates.
+Untraceable hard deletions
+Hard deletions will not show up in the query results, so tracking deletions is limited
+to flag-based soft deletions, such as a boolean is_deleted column.
+Brittle dependency between data set schema and output event schema
+Data set schema changes may occur that are incompatible with downstream
+event format schema rules. Breakages are increasingly likely if the liberation
+mechanism is separate from the code base of the data store application, which is
+usually the case for query-based systems.
+Intermittent capture
+Data is synced only at polling intervals, and so a series of individual changes to
+the same record may only show up as a single event.
+Production resource consumption
+Queries use the underlying system resources to execute, which can cause unacceptable
+delays on a production system. This issue can be mitigated by the use of
+a read-only replica, but additional financial costs and system complexity will
+apply.
+Variable query performance due to data changes
+The quantity of data queried and returned varies depending on changes made to
+the underlying data. In the worst-case scenario, the entire body of data is changed
+each time. This can result in race conditions when a query is not finished before
+the next one starts.
+Liberating Data Using Change-Data Capture Logs
+Another pattern for liberating data is using the data store’s underlying change-data
+capture logs (binary logs in MySQL, write-ahead logs for PostgreSQL) as the source of
+information. This is an append-only data logging structure that details everything
+that has happened to the tracked data sets over time. These changes include the creation,
+deletion, and updating of individual records, as well as the creation, deletion,
+and altering of the individual data sets and their schemas.
+The technology options for change-data capture are narrower than those for querybased
+capturing. Not all data stores implement an immutable logging of changes, and
+Liberating Data Using Change-Data Capture Logs | 61
+of those that do, not all of them have off-the-shelf connectors available for extracting
+the data. This approach is mostly applicable to select relational databases, such as
+MySQL and PostgreSQL, though any data store with a set of comprehensive changelogs
+is a suitable candidate. Many other modern data stores expose event APIs that act
+as a proxy for a physical write-ahead log. For example, MongoDB provides a Change
+Streams interface, whereas Couchbase provides replication access via its internal replication
+protocol.
+The data store log is unlikely to contain all changes since the beginning of time, as it
+can be a huge amount of data and is usually not necessary to retain. You will need to
+take a snapshot of the existing data prior to starting the change-data capture process
+from the data store’s log. This snapshot usually involves a large, performanceimpacting
+query on the table and is commonly referred to as bootstrapping. You must
+ensure that there is overlap between the records in the bootstrapped query results and
+the records in the log, such that you do not accidentally miss any records.
+You must checkpoint progress when capturing events from the changelogs, though
+depending on the tooling you use, this may already be built in. In the event that the
+change-data capture mechanism fails, the checkpoint is used to restore the last stored
+changelog index. This approach can only provide at-least-once production of records,
+which tends to be suitable for the entity-based nature of data liberation. The production
+of an additional record is inconsequential since updating entity data is
+idempotent.
+There are a number of options available for sourcing data from changelogs.
+Debezium is one of the most popular choices for relational databases, as it supports
+the most common ones. Debezium can produce records to both Apache Kafka and
+Apache Pulsar with its existing implementations. Support for additional brokers is
+certainly possible, though it may require some in-house development work. Maxwell
+is another example of a binary log reader option, though it is currently limited in support
+to just MySQL databases and can produce data only to Apache Kafka.
+Figure 4-5. The end-to-end workflow of a Debezium capturing data from a MySQL
+database’s binary log, and writing it to event streams in Kafka
+62 | Chapter 4: Integrating Event-Driven Architectures with Existing Systems
+Figure 4-6. The end-to-end workflow of an outbox table CDC solution
+Figure 4-6 shows the end-to-end workflow. Updates to internal tables made by the
+data store client are wrapped in a transaction with an update to the outbox table, such
+that any failures ensures data remains consistent between the two. Meanwhile, a separate
+application thread or process is used to continually poll the outboxes and produce
+the data to the corresponding event streams. Once successfully produced, the
+corresponding records in the outbox are deleted. In the case of any failure, be it the
+data store, the consumer/producer, or the event broker itself, outbox records will still
+be retained without risk of loss. This pattern provides at-least-once delivery
+guarantees.
+Performance Considerations
+The inclusion of outbox tables introduces additional load on the data store and its
+request-handling applications. For small data stores with minimal load, the overhead
+may go completely unnoticed. Alternately, it may be quite expensive with very large
+data stores, particularly those with significant load and many tables under capture.
+The cost of this approach should be evaluated on a case-by-case basis and balanced
+against the costs of a reactive strategy such as parsing the change-data capture logs.
+Isolating Internal Data Models
+An outbox does not need to map 1:1 with an internal table. In fact, one of the major
+benefits of the outbox is that the data store client can isolate the internal data model
+from downstream consumers. The internal data model of the domain may use a
+number of highly normalized tables that are optimized for relational operations but
+are largely unsuitable for consumption by downstream consumers. Even simple
+domains may comprise multiple tables, which if exposed as independent streams,
+would require reconstruction for usage by downstream consumers. This quickly
+becomes extremely expensive in terms of operational overhead, as multiple downstream
+teams will have to reconstruct the domain model and deal with handling relational
+data in event streams.
+Liberating Data Using Outbox Tables | 65
+Exposing the internal data model to downstream consumers is an
+anti-pattern. Downstream consumers should only access data formatted
+with public-facing data contracts as described in Chapter 3.
+The data store client can instead denormalize data upon insertion time such that the
+outbox mirrors the intended public data contract, though this does come at the
+expense of additional performance and storage space. Another option is to maintain
+the 1:1 mapping of changes to output event streams and denormalize the streams
+with a downstream event processor dedicated to just this task. This is a process that I
+call eventification, as it converts highly normalized relational data into easy-toconsume
+single event updates. This mimics what the data store client could do but
+does it externally to the data store to reduce load. An example of this is shown in
+Figure 4-7, where a User is denormalized based on User, Location, and Employer.
+Figure 4-7. Eventification of public User events using private User, Location, and
+Employer event streams
+In this example, the User has a foreign-key reference to the city, state/province, and
+country they live in, as well as a foreign-key reference to their current employer. It is
+reasonable that a downstream consumer of a User event may simply want everything
+about each user in a single event, instead of being forced to materialize each stream
+into a state store and use relational tooling to denormalize it. The raw, normalized
+events are sourced from the outboxes into their own event streams, but these streams
+are kept in a private namespace from the rest of the organization (covered in “Event
+Stream Metadata Tagging” on page 240) to protect the internal data model.
+Eventification of the user is performed by denormalizing the User entity and shedding
+any internal data model structures. This process requires maintaining materialized
+tables of User, Location, and Employer, such that any updates can re-exercise the
+join logic and emit updates for all affected Users. The final event is emitted to the
+public namespace of the organization for any downstream consumer to consume.
+The extent to which the internal data models are isolated from external consumers
+tends to become a point of contention in organizations moving toward event-driven
+66 | Chapter 4: Integrating Event-Driven Architectures with Existing Systems
+fields that are being used by downstream consumers. Similarly, you must also be careful
+when modifying the triggering logic. It is far more common to change the data
+definition than the triggering mechanism, as altering the latter often breaks the
+meaning of the original event definition.
+Using Explicit Schemas as Contracts
+The best way to enforce data contracts and provide consistency is to define a schema
+for each event. The producer defines an explicit schema detailing the data definition
+and the triggering logic, with all events of the same type adhering to this format. In
+doing so, the producer provides a mechanism for communicating its event format to
+all prospective consumers. The consumers, in turn, can confidently build their microservice
+business logic against the schematized data.
+Any implementation of event-based communication between a
+producer and consumer that lacks an explicit predefined schema
+will inevitably end up relying on an implicit schema. Implicit data
+contracts are brittle and susceptible to uncontrolled change, which
+can cause much undue hardship to downstream consumers.
+A consumer must be able to extract the data necessary for its business processes, and
+it cannot do that without having a set of expectations about what data should be
+available. Consumers must often rely on tribal knowledge and interteam communication
+to resolve data issues, a process that is not scalable as the number of event
+streams and teams increases. There is also substantial risk in requiring each consumer
+to independently interpret the data, as a consumer may interpret it differently
+than its peers, which leads to inconsistent views of the single source of truth.
+It may be tempting to build a common library that interprets any
+given event for all services, but this creates problems with multiple
+language formats, event evolutions, and independent release cycles.
+Duplicating efforts across services to ensure a consistent view of
+implicitly defined data is nontrivial and best avoided completely.
+Producers are also at a disadvantage with implicit schemas. Even with the best of
+intentions, a producer may not notice (or perhaps their unit tests don’t reveal) that
+they have altered their event data definition. Without an explicit check of their service’s
+event format, this situation may go unnoticed until it causes downstream consumers
+to fail. Explicit schemas give security and stability to both consumers and
+producers.
+40 | Chapter 3: Communication and Data Contracts
+
+Use the Narrowest Data Types
+Use the narrowest types for your event data. This lets you rely on the code generators,
+language type checking (if supported), and serialization unit tests to check the
+boundaries of your data. It sounds simple, but there are many cases where ambiguity
+can creep in when you don’t use the proper types. Here are a few easily avoidable realworld
+examples:
+Using string to store a numeric value
+This requires the consumer to parse and convert the string to a numeric value
+and often comes up with GPS coordinates. This is error prone and subject to failures,
+especially when a null value or an empty string is sent.
+Using integer as a boolean
+While 0 and 1 can be used to denote false and true, respectively, what does 2
+mean? How about -1?
+Using string as an enum
+This is problematic for producers, as they must ensure that their published values
+match an accepted pseudo-enum list. Typos and incorrect values will inevitably
+be introduced. A consumer interested in this field will need to know the range of
+possible values, and this will require talking to the producing team, unless it’s
+specified in the comments of the schema. In either case, this is an implicit definition,
+since the producers are not guarded against any changes to the range of values
+in the string. This whole approach is simply bad practice.
+Enums are often avoided because producers fear creating a new enum token that isn’t
+present in the consumer’s schema. However, the consumer has a responsibility to
+consider enum tokens that it does not recognize, and determine if it should process
+them using a default value or simply throw a fatal exception and halt processing until
+someone can work out what needs to be done. Both Protobuf and Avro have elegant
+ways of handling unknown enum tokens and should be used if either is selected for
+your event format.
+Keep Events Single-Purpose
+One common anti-pattern is adding a type field to an event definition, where different
+type values indicate specific subfeatures of the event. This is generally done for
+data that is “similar yet different” and is often a result of the implementer incorrectly
+identifying the events as single-purpose. Though it may seem like a time-saving
+measure or a simplification of a data access pattern, overloading events with type
+parameters is rarely a good idea.
+There are several problems with this approach. Each type parameter value usually
+has a fundamentally different business meaning, even if its technical representation is
+Designing Events | 47
+Converting Liberated Data to Events
+Liberated data, much like any other event, is subject to the same recommendations of
+schematization that were introduced in Chapter 3. One of the properties of a welldefined
+event stream is that there is an explicitly defined and evolutionarily compatible
+schema for the events it contains. You should ensure that consumers have basic
+data quality guarantees as part of the data contract defined by the schema. Changes to
+the schema can only be made according to evolutionary rules.
+Use the same standard format for both liberated event data and
+native event data across your organization.
+By definition, the data that is most relevant and used across the business is the data
+that is most necessary to liberate. Changes made to the data definitions of the source,
+such as creating new fields, altering existing ones, or dropping others, can result in
+dynamically changing data being propagated downstream to consumers. Failing to
+use an explicitly defined schema for liberated data will force downstream consumers
+to resolve any incompatibilities. This is extremely problematic for the provision of the
+single source of truth, as downstream consumers should not be attempting to parse
+or interpret data on their own. It is extremely important to provide a reliable and upto-
+date schema of the produced data and to carefully consider the evolution of the
+data over time.
+Data Liberation Patterns
+There are three main data liberation patterns that you can use to extract data from the
+underlying data store. Since liberated data is meant to form the new single source of
+truth, it follows that it must contain the entire set of data from the data store. Additionally,
+this data must be kept up to date with new insertions, updates, and deletes.
+Query-based
+You extract data by querying the underlying state store. This can be performed
+on any data store.
+Log-based
+You extract data by following the append-only log for changes to the underlying
+data structures. This option is available only for select data stores that maintain a
+log of the modifications made to the data.
+Table-based
+In this pattern, you first push data to a table used as an output queue. Another
+thread or separate process queries the table, emits the data to the relevant event
+Data Liberation Patterns | 57
+stream, and then deletes the associated entries. This method requires that the
+data store support both transactions and an output queue mechanism, usually a
+standalone table configured for use as a queue.
+While each pattern is unique, there is one commonality among the three. Each
+should produce its events in sorted timestamp order, using the source record’s most
+recent updated_at time in its output event record header. This will generate an event
+stream timestamped according to the event’s occurrence, not the time that the producer
+published the event. This is particularly important for data liberation, as it
+accurately represents when events actually happened in the workflow. Timestampbased
+interleaving of events is discussed further in Chapter 6.
+Data Liberation Frameworks
+One method of liberating data involves the usage of a dedicated, centralized framework
+to extract data into event streams. Examples of centralized frameworks for capturing
+event streams include Kafka Connect (exclusively for the Kafka platform),
+Apache Gobblin, and Apache NiFi. Each framework allows you to execute a query
+against the underlying data set with the results piped through to your output event
+streams. Each option is also scalable, such that you can add further instances to
+increase the capacity for executing change-data capture (CDC) jobs. They support
+various levels of integration with the schema registry offered by Confluent (Apache
+Kafka), but customization can certainly be performed to support other schema registries.
+See “Schema Registry” on page 241 for more information.
+Not all data liberation processes require a dedicated framework, and many systems
+are better suited to taking direct ownership of their own event stream data production.
+In fact, these frameworks inadvertently encourage data access anti-patterns. One
+of the most common anti-patterns is the exposure of internal data models to external
+systems, further increasing coupling instead of decreasing it, as is one of the major
+benefits of event-driven architectures. This will be covered further in the remainder
+of the chapter.
+Liberating Data by Query
+Query-based data liberation involves querying the data store and emitting selected
+results to an associated event stream. A client is used to request the specific data set
+from the data store using the appropriate API, SQL, or SQL-like language. A data set
+must be bulk-queried to provide the history of events. Periodic updates then follow,
+ensuring that changes are produced to the output event stream.
+There are several types of queries used in this pattern.
+58 | Chapter 4: Integrating Event-Driven Architectures with Existing Systems
+Bulk Loading
+Bulk loading queries and loads all of the data from the data set. Bulks loads are performed
+when the entire table needs to be loaded at each polling interval, as well as
+prior to ongoing incremental updates.
+Bulk loading can be expensive, as it requires obtaining the entire data set from the
+data store. For smaller data sets this tends not to be a problem, but large data sets,
+especially those with millions or billions of records, may be difficult to obtain. For
+querying and processing very large data sets I recommend you research best practices
+for your particular data store, since these can vary significantly with implementation.
+Incremental Timestamp Loading
+With incremental timestamp loading, you query and load all data since the highest
+timestamp of the previous query’s results. This approach uses an updated-at column
+or field in the data set that keeps track of the time when the record was last modified.
+During each incremental update, only records with updated-at timestamps later
+than the last processed time are queried.
+Autoincrementing ID Loading
+Autoincrementing ID loading involves querying and loading all data larger than the
+last value of the ID. This requires a strictly ordered autoincrementing Integer or
+Long field. During each incremental update, only records with an ID larger than the
+last processed ID are queried. This approach is often used for querying tables with
+immutable records, such as when using the outbox tables (see “Liberating Data Using
+Change-Data Capture Logs” on page 61).
+Custom Querying
+A custom query is limited only by the client querying language. This approach is
+often used when the client requires only a certain subset of data from a larger data set,
+or when joining and denormalizing data from multiple tables to avoid over-exposure
+of the internal data model. For instance, a user could filter business partner data
+according to a specific field, where each partner’s data is sent to its own event stream.
+Incremental Updating
+The first step of any incremental update is to ensure that the necessary timestamp or
+autoincrementing ID is available in the records of your data set. There must be a field
+that the query can use to filter out records it has already processed from those it has
+yet to process. Data sets that lack these fields will need to have them added, and the
+data store will need to be configured to populate the necessary updated_at
+Liberating Data by Query | 59
+Drawbacks of Query-Based Updating
+There are some downsides to query-based updating as well:
+Required updated-at timestamp
+The underlying table or namespace of events to query must have a column containing
+their updated-at timestamp. This is essential for tracking the last update
+time of the data and for making incremental updates.
+Untraceable hard deletions
+Hard deletions will not show up in the query results, so tracking deletions is limited
+to flag-based soft deletions, such as a boolean is_deleted column.
+Brittle dependency between data set schema and output event schema
+Data set schema changes may occur that are incompatible with downstream
+event format schema rules. Breakages are increasingly likely if the liberation
+mechanism is separate from the code base of the data store application, which is
+usually the case for query-based systems.
+Intermittent capture
+Data is synced only at polling intervals, and so a series of individual changes to
+the same record may only show up as a single event.
+Production resource consumption
+Queries use the underlying system resources to execute, which can cause unacceptable
+delays on a production system. This issue can be mitigated by the use of
+a read-only replica, but additional financial costs and system complexity will
+apply.
+Variable query performance due to data changes
+The quantity of data queried and returned varies depending on changes made to
+the underlying data. In the worst-case scenario, the entire body of data is changed
+each time. This can result in race conditions when a query is not finished before
+the next one starts.
+Liberating Data Using Change-Data Capture Logs
+Another pattern for liberating data is using the data store’s underlying change-data
+capture logs (binary logs in MySQL, write-ahead logs for PostgreSQL) as the source of
+information. This is an append-only data logging structure that details everything
+that has happened to the tracked data sets over time. These changes include the creation,
+deletion, and updating of individual records, as well as the creation, deletion,
+and altering of the individual data sets and their schemas.
+The technology options for change-data capture are narrower than those for querybased
+capturing. Not all data stores implement an immutable logging of changes, and
+Liberating Data Using Change-Data Capture Logs | 61
+of those that do, not all of them have off-the-shelf connectors available for extracting
+the data. This approach is mostly applicable to select relational databases, such as
+MySQL and PostgreSQL, though any data store with a set of comprehensive changelogs
+is a suitable candidate. Many other modern data stores expose event APIs that act
+as a proxy for a physical write-ahead log. For example, MongoDB provides a Change
+Streams interface, whereas Couchbase provides replication access via its internal replication
+protocol.
+The data store log is unlikely to contain all changes since the beginning of time, as it
+can be a huge amount of data and is usually not necessary to retain. You will need to
+take a snapshot of the existing data prior to starting the change-data capture process
+from the data store’s log. This snapshot usually involves a large, performanceimpacting
+query on the table and is commonly referred to as bootstrapping. You must
+ensure that there is overlap between the records in the bootstrapped query results and
+the records in the log, such that you do not accidentally miss any records.
+You must checkpoint progress when capturing events from the changelogs, though
+depending on the tooling you use, this may already be built in. In the event that the
+change-data capture mechanism fails, the checkpoint is used to restore the last stored
+changelog index. This approach can only provide at-least-once production of records,
+which tends to be suitable for the entity-based nature of data liberation. The production
+of an additional record is inconsequential since updating entity data is
+idempotent.
+There are a number of options available for sourcing data from changelogs.
+Debezium is one of the most popular choices for relational databases, as it supports
+the most common ones. Debezium can produce records to both Apache Kafka and
+Apache Pulsar with its existing implementations. Support for additional brokers is
+certainly possible, though it may require some in-house development work. Maxwell
+is another example of a binary log reader option, though it is currently limited in support
+to just MySQL databases and can produce data only to Apache Kafka.
+Figure 4-5. The end-to-end workflow of a Debezium capturing data from a MySQL
+database’s binary log, and writing it to event streams in Kafka
+62 | Chapter 4: Integrating Event-Driven Architectures with Existing Systems
+Figure 4-6. The end-to-end workflow of an outbox table CDC solution
+Figure 4-6 shows the end-to-end workflow. Updates to internal tables made by the
+data store client are wrapped in a transaction with an update to the outbox table, such
+that any failures ensures data remains consistent between the two. Meanwhile, a separate
+application thread or process is used to continually poll the outboxes and produce
+the data to the corresponding event streams. Once successfully produced, the
+corresponding records in the outbox are deleted. In the case of any failure, be it the
+data store, the consumer/producer, or the event broker itself, outbox records will still
+be retained without risk of loss. This pattern provides at-least-once delivery
+guarantees.
+Performance Considerations
+The inclusion of outbox tables introduces additional load on the data store and its
+request-handling applications. For small data stores with minimal load, the overhead
+may go completely unnoticed. Alternately, it may be quite expensive with very large
+data stores, particularly those with significant load and many tables under capture.
+The cost of this approach should be evaluated on a case-by-case basis and balanced
+against the costs of a reactive strategy such as parsing the change-data capture logs.
+Isolating Internal Data Models
+An outbox does not need to map 1:1 with an internal table. In fact, one of the major
+benefits of the outbox is that the data store client can isolate the internal data model
+from downstream consumers. The internal data model of the domain may use a
+number of highly normalized tables that are optimized for relational operations but
+are largely unsuitable for consumption by downstream consumers. Even simple
+domains may comprise multiple tables, which if exposed as independent streams,
+would require reconstruction for usage by downstream consumers. This quickly
+becomes extremely expensive in terms of operational overhead, as multiple downstream
+teams will have to reconstruct the domain model and deal with handling relational
+data in event streams.
+Liberating Data Using Outbox Tables | 65
+Exposing the internal data model to downstream consumers is an
+anti-pattern. Downstream consumers should only access data formatted
+with public-facing data contracts as described in Chapter 3.
+The data store client can instead denormalize data upon insertion time such that the
+outbox mirrors the intended public data contract, though this does come at the
+expense of additional performance and storage space. Another option is to maintain
+the 1:1 mapping of changes to output event streams and denormalize the streams
+with a downstream event processor dedicated to just this task. This is a process that I
+call eventification, as it converts highly normalized relational data into easy-toconsume
+single event updates. This mimics what the data store client could do but
+does it externally to the data store to reduce load. An example of this is shown in
+Figure 4-7, where a User is denormalized based on User, Location, and Employer.
+Figure 4-7. Eventification of public User events using private User, Location, and
+Employer event streams
+In this example, the User has a foreign-key reference to the city, state/province, and
+country they live in, as well as a foreign-key reference to their current employer. It is
+reasonable that a downstream consumer of a User event may simply want everything
+about each user in a single event, instead of being forced to materialize each stream
+into a state store and use relational tooling to denormalize it. The raw, normalized
+events are sourced from the outboxes into their own event streams, but these streams
+are kept in a private namespace from the rest of the organization (covered in “Event
+Stream Metadata Tagging” on page 240) to protect the internal data model.
+Eventification of the user is performed by denormalizing the User entity and shedding
+any internal data model structures. This process requires maintaining materialized
+tables of User, Location, and Employer, such that any updates can re-exercise the
+join logic and emit updates for all affected Users. The final event is emitted to the
+public namespace of the organization for any downstream consumer to consume.
+The extent to which the internal data models are isolated from external consumers
+tends to become a point of contention in organizations moving toward event-driven
+66 | Chapter 4: Integrating Event-Driven Architectures with Existing Systems
+fields that are being used by downstream consumers. Similarly, you must also be careful
+when modifying the triggering logic. It is far more common to change the data
+definition than the triggering mechanism, as altering the latter often breaks the
+meaning of the original event definition.
+Using Explicit Schemas as Contracts
+The best way to enforce data contracts and provide consistency is to define a schema
+for each event. The producer defines an explicit schema detailing the data definition
+and the triggering logic, with all events of the same type adhering to this format. In
+doing so, the producer provides a mechanism for communicating its event format to
+all prospective consumers. The consumers, in turn, can confidently build their microservice
+business logic against the schematized data.
+Any implementation of event-based communication between a
+producer and consumer that lacks an explicit predefined schema
+will inevitably end up relying on an implicit schema. Implicit data
+contracts are brittle and susceptible to uncontrolled change, which
+can cause much undue hardship to downstream consumers.
+A consumer must be able to extract the data necessary for its business processes, and
+it cannot do that without having a set of expectations about what data should be
+available. Consumers must often rely on tribal knowledge and interteam communication
+to resolve data issues, a process that is not scalable as the number of event
+streams and teams increases. There is also substantial risk in requiring each consumer
+to independently interpret the data, as a consumer may interpret it differently
+than its peers, which leads to inconsistent views of the single source of truth.
+It may be tempting to build a common library that interprets any
+given event for all services, but this creates problems with multiple
+language formats, event evolutions, and independent release cycles.
+Duplicating efforts across services to ensure a consistent view of
+implicitly defined data is nontrivial and best avoided completely.
+Producers are also at a disadvantage with implicit schemas. Even with the best of
+intentions, a producer may not notice (or perhaps their unit tests don’t reveal) that
+they have altered their event data definition. Without an explicit check of their service’s
+event format, this situation may go unnoticed until it causes downstream consumers
+to fail. Explicit schemas give security and stability to both consumers and
+producers.
+40 | Chapter 3: Communication and Data Contracts
+
+Use the Narrowest Data Types
+Use the narrowest types for your event data. This lets you rely on the code generators,
+language type checking (if supported), and serialization unit tests to check the
+boundaries of your data. It sounds simple, but there are many cases where ambiguity
+can creep in when you don’t use the proper types. Here are a few easily avoidable realworld
+examples:
+Using string to store a numeric value
+This requires the consumer to parse and convert the string to a numeric value
+and often comes up with GPS coordinates. This is error prone and subject to failures,
+especially when a null value or an empty string is sent.
+Using integer as a boolean
+While 0 and 1 can be used to denote false and true, respectively, what does 2
+mean? How about -1?
+Using string as an enum
+This is problematic for producers, as they must ensure that their published values
+match an accepted pseudo-enum list. Typos and incorrect values will inevitably
+be introduced. A consumer interested in this field will need to know the range of
+possible values, and this will require talking to the producing team, unless it’s
+specified in the comments of the schema. In either case, this is an implicit definition,
+since the producers are not guarded against any changes to the range of values
+in the string. This whole approach is simply bad practice.
+Enums are often avoided because producers fear creating a new enum token that isn’t
+present in the consumer’s schema. However, the consumer has a responsibility to
+consider enum tokens that it does not recognize, and determine if it should process
+them using a default value or simply throw a fatal exception and halt processing until
+someone can work out what needs to be done. Both Protobuf and Avro have elegant
+ways of handling unknown enum tokens and should be used if either is selected for
+your event format.
+Keep Events Single-Purpose
+One common anti-pattern is adding a type field to an event definition, where different
+type values indicate specific subfeatures of the event. This is generally done for
+data that is “similar yet different” and is often a result of the implementer incorrectly
+identifying the events as single-purpose. Though it may seem like a time-saving
+measure or a simplification of a data access pattern, overloading events with type
+parameters is rarely a good idea.
+There are several problems with this approach. Each type parameter value usually
+has a fundamentally different business meaning, even if its technical representation is
+Designing Events | 47
+Converting Liberated Data to Events
+Liberated data, much like any other event, is subject to the same recommendations of
+schematization that were introduced in Chapter 3. One of the properties of a welldefined
+event stream is that there is an explicitly defined and evolutionarily compatible
+schema for the events it contains. You should ensure that consumers have basic
+data quality guarantees as part of the data contract defined by the schema. Changes to
+the schema can only be made according to evolutionary rules.
+Use the same standard format for both liberated event data and
+native event data across your organization.
+By definition, the data that is most relevant and used across the business is the data
+that is most necessary to liberate. Changes made to the data definitions of the source,
+such as creating new fields, altering existing ones, or dropping others, can result in
+dynamically changing data being propagated downstream to consumers. Failing to
+use an explicitly defined schema for liberated data will force downstream consumers
+to resolve any incompatibilities. This is extremely problematic for the provision of the
+single source of truth, as downstream consumers should not be attempting to parse
+or interpret data on their own. It is extremely important to provide a reliable and upto-
+date schema of the produced data and to carefully consider the evolution of the
+data over time.
+Data Liberation Patterns
+There are three main data liberation patterns that you can use to extract data from the
+underlying data store. Since liberated data is meant to form the new single source of
+truth, it follows that it must contain the entire set of data from the data store. Additionally,
+this data must be kept up to date with new insertions, updates, and deletes.
+Query-based
+You extract data by querying the underlying state store. This can be performed
+on any data store.
+Log-based
+You extract data by following the append-only log for changes to the underlying
+data structures. This option is available only for select data stores that maintain a
+log of the modifications made to the data.
+Table-based
+In this pattern, you first push data to a table used as an output queue. Another
+thread or separate process queries the table, emits the data to the relevant event
+Data Liberation Patterns | 57
+stream, and then deletes the associated entries. This method requires that the
+data store support both transactions and an output queue mechanism, usually a
+standalone table configured for use as a queue.
+While each pattern is unique, there is one commonality among the three. Each
+should produce its events in sorted timestamp order, using the source record’s most
+recent updated_at time in its output event record header. This will generate an event
+stream timestamped according to the event’s occurrence, not the time that the producer
+published the event. This is particularly important for data liberation, as it
+accurately represents when events actually happened in the workflow. Timestampbased
+interleaving of events is discussed further in Chapter 6.
+Data Liberation Frameworks
+One method of liberating data involves the usage of a dedicated, centralized framework
+to extract data into event streams. Examples of centralized frameworks for capturing
+event streams include Kafka Connect (exclusively for the Kafka platform),
+Apache Gobblin, and Apache NiFi. Each framework allows you to execute a query
+against the underlying data set with the results piped through to your output event
+streams. Each option is also scalable, such that you can add further instances to
+increase the capacity for executing change-data capture (CDC) jobs. They support
+various levels of integration with the schema registry offered by Confluent (Apache
+Kafka), but customization can certainly be performed to support other schema registries.
+See “Schema Registry” on page 241 for more information.
+Not all data liberation processes require a dedicated framework, and many systems
+are better suited to taking direct ownership of their own event stream data production.
+In fact, these frameworks inadvertently encourage data access anti-patterns. One
+of the most common anti-patterns is the exposure of internal data models to external
+systems, further increasing coupling instead of decreasing it, as is one of the major
+benefits of event-driven architectures. This will be covered further in the remainder
+of the chapter.
+Liberating Data by Query
+Query-based data liberation involves querying the data store and emitting selected
+results to an associated event stream. A client is used to request the specific data set
+from the data store using the appropriate API, SQL, or SQL-like language. A data set
+must be bulk-queried to provide the history of events. Periodic updates then follow,
+ensuring that changes are produced to the output event stream.
+There are several types of queries used in this pattern.
+58 | Chapter 4: Integrating Event-Driven Architectures with Existing Systems
+Bulk Loading
+Bulk loading queries and loads all of the data from the data set. Bulks loads are performed
+when the entire table needs to be loaded at each polling interval, as well as
+prior to ongoing incremental updates.
+Bulk loading can be expensive, as it requires obtaining the entire data set from the
+data store. For smaller data sets this tends not to be a problem, but large data sets,
+especially those with millions or billions of records, may be difficult to obtain. For
+querying and processing very large data sets I recommend you research best practices
+for your particular data store, since these can vary significantly with implementation.
+Incremental Timestamp Loading
+With incremental timestamp loading, you query and load all data since the highest
+timestamp of the previous query’s results. This approach uses an updated-at column
+or field in the data set that keeps track of the time when the record was last modified.
+During each incremental update, only records with updated-at timestamps later
+than the last processed time are queried.
+Autoincrementing ID Loading
+Autoincrementing ID loading involves querying and loading all data larger than the
+last value of the ID. This requires a strictly ordered autoincrementing Integer or
+Long field. During each incremental update, only records with an ID larger than the
+last processed ID are queried. This approach is often used for querying tables with
+immutable records, such as when using the outbox tables (see “Liberating Data Using
+Change-Data Capture Logs” on page 61).
+Custom Querying
+A custom query is limited only by the client querying language. This approach is
+often used when the client requires only a certain subset of data from a larger data set,
+or when joining and denormalizing data from multiple tables to avoid over-exposure
+of the internal data model. For instance, a user could filter business partner data
+according to a specific field, where each partner’s data is sent to its own event stream.
+Incremental Updating
+The first step of any incremental update is to ensure that the necessary timestamp or
+autoincrementing ID is available in the records of your data set. There must be a field
+that the query can use to filter out records it has already processed from those it has
+yet to process. Data sets that lack these fields will need to have them added, and the
+data store will need to be configured to populate the necessary updated_at
+Liberating Data by Query | 59
+Drawbacks of Query-Based Updating
+There are some downsides to query-based updating as well:
+Required updated-at timestamp
+The underlying table or namespace of events to query must have a column containing
+their updated-at timestamp. This is essential for tracking the last update
+time of the data and for making incremental updates.
+Untraceable hard deletions
+Hard deletions will not show up in the query results, so tracking deletions is limited
+to flag-based soft deletions, such as a boolean is_deleted column.
+Brittle dependency between data set schema and output event schema
+Data set schema changes may occur that are incompatible with downstream
+event format schema rules. Breakages are increasingly likely if the liberation
+mechanism is separate from the code base of the data store application, which is
+usually the case for query-based systems.
+Intermittent capture
+Data is synced only at polling intervals, and so a series of individual changes to
+the same record may only show up as a single event.
+Production resource consumption
+Queries use the underlying system resources to execute, which can cause unacceptable
+delays on a production system. This issue can be mitigated by the use of
+a read-only replica, but additional financial costs and system complexity will
+apply.
+Variable query performance due to data changes
+The quantity of data queried and returned varies depending on changes made to
+the underlying data. In the worst-case scenario, the entire body of data is changed
+each time. This can result in race conditions when a query is not finished before
+the next one starts.
+Liberating Data Using Change-Data Capture Logs
+Another pattern for liberating data is using the data store’s underlying change-data
+capture logs (binary logs in MySQL, write-ahead logs for PostgreSQL) as the source of
+information. This is an append-only data logging structure that details everything
+that has happened to the tracked data sets over time. These changes include the creation,
+deletion, and updating of individual records, as well as the creation, deletion,
+and altering of the individual data sets and their schemas.
+The technology options for change-data capture are narrower than those for querybased
+capturing. Not all data stores implement an immutable logging of changes, and
+Liberating Data Using Change-Data Capture Logs | 61
+of those that do, not all of them have off-the-shelf connectors available for extracting
+the data. This approach is mostly applicable to select relational databases, such as
+MySQL and PostgreSQL, though any data store with a set of comprehensive changelogs
+is a suitable candidate. Many other modern data stores expose event APIs that act
+as a proxy for a physical write-ahead log. For example, MongoDB provides a Change
+Streams interface, whereas Couchbase provides replication access via its internal replication
+protocol.
+The data store log is unlikely to contain all changes since the beginning of time, as it
+can be a huge amount of data and is usually not necessary to retain. You will need to
+take a snapshot of the existing data prior to starting the change-data capture process
+from the data store’s log. This snapshot usually involves a large, performanceimpacting
+query on the table and is commonly referred to as bootstrapping. You must
+ensure that there is overlap between the records in the bootstrapped query results and
+the records in the log, such that you do not accidentally miss any records.
+You must checkpoint progress when capturing events from the changelogs, though
+depending on the tooling you use, this may already be built in. In the event that the
+change-data capture mechanism fails, the checkpoint is used to restore the last stored
+changelog index. This approach can only provide at-least-once production of records,
+which tends to be suitable for the entity-based nature of data liberation. The production
+of an additional record is inconsequential since updating entity data is
+idempotent.
+There are a number of options available for sourcing data from changelogs.
+Debezium is one of the most popular choices for relational databases, as it supports
+the most common ones. Debezium can produce records to both Apache Kafka and
+Apache Pulsar with its existing implementations. Support for additional brokers is
+certainly possible, though it may require some in-house development work. Maxwell
+is another example of a binary log reader option, though it is currently limited in support
+to just MySQL databases and can produce data only to Apache Kafka.
+Figure 4-5. The end-to-end workflow of a Debezium capturing data from a MySQL
+database’s binary log, and writing it to event streams in Kafka
+62 | Chapter 4: Integrating Event-Driven Architectures with Existing Systems
+Figure 4-6. The end-to-end workflow of an outbox table CDC solution
+Figure 4-6 shows the end-to-end workflow. Updates to internal tables made by the
+data store client are wrapped in a transaction with an update to the outbox table, such
+that any failures ensures data remains consistent between the two. Meanwhile, a separate
+application thread or process is used to continually poll the outboxes and produce
+the data to the corresponding event streams. Once successfully produced, the
+corresponding records in the outbox are deleted. In the case of any failure, be it the
+data store, the consumer/producer, or the event broker itself, outbox records will still
+be retained without risk of loss. This pattern provides at-least-once delivery
+guarantees.
+Performance Considerations
+The inclusion of outbox tables introduces additional load on the data store and its
+request-handling applications. For small data stores with minimal load, the overhead
+may go completely unnoticed. Alternately, it may be quite expensive with very large
+data stores, particularly those with significant load and many tables under capture.
+The cost of this approach should be evaluated on a case-by-case basis and balanced
+against the costs of a reactive strategy such as parsing the change-data capture logs.
+Isolating Internal Data Models
+An outbox does not need to map 1:1 with an internal table. In fact, one of the major
+benefits of the outbox is that the data store client can isolate the internal data model
+from downstream consumers. The internal data model of the domain may use a
+number of highly normalized tables that are optimized for relational operations but
+are largely unsuitable for consumption by downstream consumers. Even simple
+domains may comprise multiple tables, which if exposed as independent streams,
+would require reconstruction for usage by downstream consumers. This quickly
+becomes extremely expensive in terms of operational overhead, as multiple downstream
+teams will have to reconstruct the domain model and deal with handling relational
+data in event streams.
+Liberating Data Using Outbox Tables | 65
+Exposing the internal data model to downstream consumers is an
+anti-pattern. Downstream consumers should only access data formatted
+with public-facing data contracts as described in Chapter 3.
+The data store client can instead denormalize data upon insertion time such that the
+outbox mirrors the intended public data contract, though this does come at the
+expense of additional performance and storage space. Another option is to maintain
+the 1:1 mapping of changes to output event streams and denormalize the streams
+with a downstream event processor dedicated to just this task. This is a process that I
+call eventification, as it converts highly normalized relational data into easy-toconsume
+single event updates. This mimics what the data store client could do but
+does it externally to the data store to reduce load. An example of this is shown in
+Figure 4-7, where a User is denormalized based on User, Location, and Employer.
+Figure 4-7. Eventification of public User events using private User, Location, and
+Employer event streams
+In this example, the User has a foreign-key reference to the city, state/province, and
+country they live in, as well as a foreign-key reference to their current employer. It is
+reasonable that a downstream consumer of a User event may simply want everything
+about each user in a single event, instead of being forced to materialize each stream
+into a state store and use relational tooling to denormalize it. The raw, normalized
+events are sourced from the outboxes into their own event streams, but these streams
+are kept in a private namespace from the rest of the organization (covered in “Event
+Stream Metadata Tagging” on page 240) to protect the internal data model.
+Eventification of the user is performed by denormalizing the User entity and shedding
+any internal data model structures. This process requires maintaining materialized
+tables of User, Location, and Employer, such that any updates can re-exercise the
+join logic and emit updates for all affected Users. The final event is emitted to the
+public namespace of the organization for any downstream consumer to consume.
+The extent to which the internal data models are isolated from external consumers
+tends to become a point of contention in organizations moving toward event-driven
+66 | Chapter 4: Integrating Event-Driven Architectures with Existing Systems
+fields that are being used by downstream consumers. Similarly, you must also be careful
+when modifying the triggering logic. It is far more common to change the data
+definition than the triggering mechanism, as altering the latter often breaks the
+meaning of the original event definition.
+Using Explicit Schemas as Contracts
+The best way to enforce data contracts and provide consistency is to define a schema
+for each event. The producer defines an explicit schema detailing the data definition
+and the triggering logic, with all events of the same type adhering to this format. In
+doing so, the producer provides a mechanism for communicating its event format to
+all prospective consumers. The consumers, in turn, can confidently build their microservice
+business logic against the schematized data.
+Any implementation of event-based communication between a
+producer and consumer that lacks an explicit predefined schema
+will inevitably end up relying on an implicit schema. Implicit data
+contracts are brittle and susceptible to uncontrolled change, which
+can cause much undue hardship to downstream consumers.
+A consumer must be able to extract the data necessary for its business processes, and
+it cannot do that without having a set of expectations about what data should be
+available. Consumers must often rely on tribal knowledge and interteam communication
+to resolve data issues, a process that is not scalable as the number of event
+streams and teams increases. There is also substantial risk in requiring each consumer
+to independently interpret the data, as a consumer may interpret it differently
+than its peers, which leads to inconsistent views of the single source of truth.
+It may be tempting to build a common library that interprets any
+given event for all services, but this creates problems with multiple
+language formats, event evolutions, and independent release cycles.
+Duplicating efforts across services to ensure a consistent view of
+implicitly defined data is nontrivial and best avoided completely.
+Producers are also at a disadvantage with implicit schemas. Even with the best of
+intentions, a producer may not notice (or perhaps their unit tests don’t reveal) that
+they have altered their event data definition. Without an explicit check of their service’s
+event format, this situation may go unnoticed until it causes downstream consumers
+to fail. Explicit schemas give security and stability to both consumers and
+producers.
+40 | Chapter 3: Communication and Data Contracts
+
+Use the Narrowest Data Types
+Use the narrowest types for your event data. This lets you rely on the code generators,
+language type checking (if supported), and serialization unit tests to check the
+boundaries of your data. It sounds simple, but there are many cases where ambiguity
+can creep in when you don’t use the proper types. Here are a few easily avoidable realworld
+examples:
+Using string to store a numeric value
+This requires the consumer to parse and convert the string to a numeric value
+and often comes up with GPS coordinates. This is error prone and subject to failures,
+especially when a null value or an empty string is sent.
+Using integer as a boolean
+While 0 and 1 can be used to denote false and true, respectively, what does 2
+mean? How about -1?
+Using string as an enum
+This is problematic for producers, as they must ensure that their published values
+match an accepted pseudo-enum list. Typos and incorrect values will inevitably
+be introduced. A consumer interested in this field will need to know the range of
+possible values, and this will require talking to the producing team, unless it’s
+specified in the comments of the schema. In either case, this is an implicit definition,
+since the producers are not guarded against any changes to the range of values
+in the string. This whole approach is simply bad practice.
+Enums are often avoided because producers fear creating a new enum token that isn’t
+present in the consumer’s schema. However, the consumer has a responsibility to
+consider enum tokens that it does not recognize, and determine if it should process
+them using a default value or simply throw a fatal exception and halt processing until
+someone can work out what needs to be done. Both Protobuf and Avro have elegant
+ways of handling unknown enum tokens and should be used if either is selected for
+your event format.
+Keep Events Single-Purpose
+One common anti-pattern is adding a type field to an event definition, where different
+type values indicate specific subfeatures of the event. This is generally done for
+data that is “similar yet different” and is often a result of the implementer incorrectly
+identifying the events as single-purpose. Though it may seem like a time-saving
+measure or a simplification of a data access pattern, overloading events with type
+parameters is rarely a good idea.
+There are several problems with this approach. Each type parameter value usually
+has a fundamentally different business meaning, even if its technical representation is
+Designing Events | 47
+Converting Liberated Data to Events
+Liberated data, much like any other event, is subject to the same recommendations of
+schematization that were introduced in Chapter 3. One of the properties of a welldefined
+event stream is that there is an explicitly defined and evolutionarily compatible
+schema for the events it contains. You should ensure that consumers have basic
+data quality guarantees as part of the data contract defined by the schema. Changes to
+the schema can only be made according to evolutionary rules.
+Use the same standard format for both liberated event data and
+native event data across your organization.
+By definition, the data that is most relevant and used across the business is the data
+that is most necessary to liberate. Changes made to the data definitions of the source,
+such as creating new fields, altering existing ones, or dropping others, can result in
+dynamically changing data being propagated downstream to consumers. Failing to
+use an explicitly defined schema for liberated data will force downstream consumers
+to resolve any incompatibilities. This is extremely problematic for the provision of the
+single source of truth, as downstream consumers should not be attempting to parse
+or interpret data on their own. It is extremely important to provide a reliable and upto-
+date schema of the produced data and to carefully consider the evolution of the
+data over time.
+Data Liberation Patterns
+There are three main data liberation patterns that you can use to extract data from the
+underlying data store. Since liberated data is meant to form the new single source of
+truth, it follows that it must contain the entire set of data from the data store. Additionally,
+this data must be kept up to date with new insertions, updates, and deletes.
+Query-based
+You extract data by querying the underlying state store. This can be performed
+on any data store.
+Log-based
+You extract data by following the append-only log for changes to the underlying
+data structures. This option is available only for select data stores that maintain a
+log of the modifications made to the data.
+Table-based
+In this pattern, you first push data to a table used as an output queue. Another
+thread or separate process queries the table, emits the data to the relevant event
+Data Liberation Patterns | 57
+stream, and then deletes the associated entries. This method requires that the
+data store support both transactions and an output queue mechanism, usually a
+standalone table configured for use as a queue.
+While each pattern is unique, there is one commonality among the three. Each
+should produce its events in sorted timestamp order, using the source record’s most
+recent updated_at time in its output event record header. This will generate an event
+stream timestamped according to the event’s occurrence, not the time that the producer
+published the event. This is particularly important for data liberation, as it
+accurately represents when events actually happened in the workflow. Timestampbased
+interleaving of events is discussed further in Chapter 6.
+Data Liberation Frameworks
+One method of liberating data involves the usage of a dedicated, centralized framework
+to extract data into event streams. Examples of centralized frameworks for capturing
+event streams include Kafka Connect (exclusively for the Kafka platform),
+Apache Gobblin, and Apache NiFi. Each framework allows you to execute a query
+against the underlying data set with the results piped through to your output event
+streams. Each option is also scalable, such that you can add further instances to
+increase the capacity for executing change-data capture (CDC) jobs. They support
+various levels of integration with the schema registry offered by Confluent (Apache
+Kafka), but customization can certainly be performed to support other schema registries.
+See “Schema Registry” on page 241 for more information.
+Not all data liberation processes require a dedicated framework, and many systems
+are better suited to taking direct ownership of their own event stream data production.
+In fact, these frameworks inadvertently encourage data access anti-patterns. One
+of the most common anti-patterns is the exposure of internal data models to external
+systems, further increasing coupling instead of decreasing it, as is one of the major
+benefits of event-driven architectures. This will be covered further in the remainder
+of the chapter.
+Liberating Data by Query
+Query-based data liberation involves querying the data store and emitting selected
+results to an associated event stream. A client is used to request the specific data set
+from the data store using the appropriate API, SQL, or SQL-like language. A data set
+must be bulk-queried to provide the history of events. Periodic updates then follow,
+ensuring that changes are produced to the output event stream.
+There are several types of queries used in this pattern.
+58 | Chapter 4: Integrating Event-Driven Architectures with Existing Systems
+Bulk Loading
+Bulk loading queries and loads all of the data from the data set. Bulks loads are performed
+when the entire table needs to be loaded at each polling interval, as well as
+prior to ongoing incremental updates.
+Bulk loading can be expensive, as it requires obtaining the entire data set from the
+data store. For smaller data sets this tends not to be a problem, but large data sets,
+especially those with millions or billions of records, may be difficult to obtain. For
+querying and processing very large data sets I recommend you research best practices
+for your particular data store, since these can vary significantly with implementation.
+Incremental Timestamp Loading
+With incremental timestamp loading, you query and load all data since the highest
+timestamp of the previous query’s results. This approach uses an updated-at column
+or field in the data set that keeps track of the time when the record was last modified.
+During each incremental update, only records with updated-at timestamps later
+than the last processed time are queried.
+Autoincrementing ID Loading
+Autoincrementing ID loading involves querying and loading all data larger than the
+last value of the ID. This requires a strictly ordered autoincrementing Integer or
+Long field. During each incremental update, only records with an ID larger than the
+last processed ID are queried. This approach is often used for querying tables with
+immutable records, such as when using the outbox tables (see “Liberating Data Using
+Change-Data Capture Logs” on page 61).
+Custom Querying
+A custom query is limited only by the client querying language. This approach is
+often used when the client requires only a certain subset of data from a larger data set,
+or when joining and denormalizing data from multiple tables to avoid over-exposure
+of the internal data model. For instance, a user could filter business partner data
+according to a specific field, where each partner’s data is sent to its own event stream.
+Incremental Updating
+The first step of any incremental update is to ensure that the necessary timestamp or
+autoincrementing ID is available in the records of your data set. There must be a field
+that the query can use to filter out records it has already processed from those it has
+yet to process. Data sets that lack these fields will need to have them added, and the
+data store will need to be configured to populate the necessary updated_at
+Liberating Data by Query | 59
+Drawbacks of Query-Based Updating
+There are some downsides to query-based updating as well:
+Required updated-at timestamp
+The underlying table or namespace of events to query must have a column containing
+their updated-at timestamp. This is essential for tracking the last update
+time of the data and for making incremental updates.
+Untraceable hard deletions
+Hard deletions will not show up in the query results, so tracking deletions is limited
+to flag-based soft deletions, such as a boolean is_deleted column.
+Brittle dependency between data set schema and output event schema
+Data set schema changes may occur that are incompatible with downstream
+event format schema rules. Breakages are increasingly likely if the liberation
+mechanism is separate from the code base of the data store application, which is
+usually the case for query-based systems.
+Intermittent capture
+Data is synced only at polling intervals, and so a series of individual changes to
+the same record may only show up as a single event.
+Production resource consumption
+Queries use the underlying system resources to execute, which can cause unacceptable
+delays on a production system. This issue can be mitigated by the use of
+a read-only replica, but additional financial costs and system complexity will
+apply.
+Variable query performance due to data changes
+The quantity of data queried and returned varies depending on changes made to
+the underlying data. In the worst-case scenario, the entire body of data is changed
+each time. This can result in race conditions when a query is not finished before
+the next one starts.
+Liberating Data Using Change-Data Capture Logs
+Another pattern for liberating data is using the data store’s underlying change-data
+capture logs (binary logs in MySQL, write-ahead logs for PostgreSQL) as the source of
+information. This is an append-only data logging structure that details everything
+that has happened to the tracked data sets over time. These changes include the creation,
+deletion, and updating of individual records, as well as the creation, deletion,
+and altering of the individual data sets and their schemas.
+The technology options for change-data capture are narrower than those for querybased
+capturing. Not all data stores implement an immutable logging of changes, and
+Liberating Data Using Change-Data Capture Logs | 61
+of those that do, not all of them have off-the-shelf connectors available for extracting
+the data. This approach is mostly applicable to select relational databases, such as
+MySQL and PostgreSQL, though any data store with a set of comprehensive changelogs
+is a suitable candidate. Many other modern data stores expose event APIs that act
+as a proxy for a physical write-ahead log. For example, MongoDB provides a Change
+Streams interface, whereas Couchbase provides replication access via its internal replication
+protocol.
+The data store log is unlikely to contain all changes since the beginning of time, as it
+can be a huge amount of data and is usually not necessary to retain. You will need to
+take a snapshot of the existing data prior to starting the change-data capture process
+from the data store’s log. This snapshot usually involves a large, performanceimpacting
+query on the table and is commonly referred to as bootstrapping. You must
+ensure that there is overlap between the records in the bootstrapped query results and
+the records in the log, such that you do not accidentally miss any records.
+You must checkpoint progress when capturing events from the changelogs, though
+depending on the tooling you use, this may already be built in. In the event that the
+change-data capture mechanism fails, the checkpoint is used to restore the last stored
+changelog index. This approach can only provide at-least-once production of records,
+which tends to be suitable for the entity-based nature of data liberation. The production
+of an additional record is inconsequential since updating entity data is
+idempotent.
+There are a number of options available for sourcing data from changelogs.
+Debezium is one of the most popular choices for relational databases, as it supports
+the most common ones. Debezium can produce records to both Apache Kafka and
+Apache Pulsar with its existing implementations. Support for additional brokers is
+certainly possible, though it may require some in-house development work. Maxwell
+is another example of a binary log reader option, though it is currently limited in support
+to just MySQL databases and can produce data only to Apache Kafka.
+Figure 4-5. The end-to-end workflow of a Debezium capturing data from a MySQL
+database’s binary log, and writing it to event streams in Kafka
+62 | Chapter 4: Integrating Event-Driven Architectures with Existing Systems
+Figure 4-6. The end-to-end workflow of an outbox table CDC solution
+Figure 4-6 shows the end-to-end workflow. Updates to internal tables made by the
+data store client are wrapped in a transaction with an update to the outbox table, such
+that any failures ensures data remains consistent between the two. Meanwhile, a separate
+application thread or process is used to continually poll the outboxes and produce
+the data to the corresponding event streams. Once successfully produced, the
+corresponding records in the outbox are deleted. In the case of any failure, be it the
+data store, the consumer/producer, or the event broker itself, outbox records will still
+be retained without risk of loss. This pattern provides at-least-once delivery
+guarantees.
+Performance Considerations
+The inclusion of outbox tables introduces additional load on the data store and its
+request-handling applications. For small data stores with minimal load, the overhead
+may go completely unnoticed. Alternately, it may be quite expensive with very large
+data stores, particularly those with significant load and many tables under capture.
+The cost of this approach should be evaluated on a case-by-case basis and balanced
+against the costs of a reactive strategy such as parsing the change-data capture logs.
+Isolating Internal Data Models
+An outbox does not need to map 1:1 with an internal table. In fact, one of the major
+benefits of the outbox is that the data store client can isolate the internal data model
+from downstream consumers. The internal data model of the domain may use a
+number of highly normalized tables that are optimized for relational operations but
+are largely unsuitable for consumption by downstream consumers. Even simple
+domains may comprise multiple tables, which if exposed as independent streams,
+would require reconstruction for usage by downstream consumers. This quickly
+becomes extremely expensive in terms of operational overhead, as multiple downstream
+teams will have to reconstruct the domain model and deal with handling relational
+data in event streams.
+Liberating Data Using Outbox Tables | 65
+Exposing the internal data model to downstream consumers is an
+anti-pattern. Downstream consumers should only access data formatted
+with public-facing data contracts as described in Chapter 3.
+The data store client can instead denormalize data upon insertion time such that the
+outbox mirrors the intended public data contract, though this does come at the
+expense of additional performance and storage space. Another option is to maintain
+the 1:1 mapping of changes to output event streams and denormalize the streams
+with a downstream event processor dedicated to just this task. This is a process that I
+call eventification, as it converts highly normalized relational data into easy-toconsume
+single event updates. This mimics what the data store client could do but
+does it externally to the data store to reduce load. An example of this is shown in
+Figure 4-7, where a User is denormalized based on User, Location, and Employer.
+Figure 4-7. Eventification of public User events using private User, Location, and
+Employer event streams
+In this example, the User has a foreign-key reference to the city, state/province, and
+country they live in, as well as a foreign-key reference to their current employer. It is
+reasonable that a downstream consumer of a User event may simply want everything
+about each user in a single event, instead of being forced to materialize each stream
+into a state store and use relational tooling to denormalize it. The raw, normalized
+events are sourced from the outboxes into their own event streams, but these streams
+are kept in a private namespace from the rest of the organization (covered in “Event
+Stream Metadata Tagging” on page 240) to protect the internal data model.
+Eventification of the user is performed by denormalizing the User entity and shedding
+any internal data model structures. This process requires maintaining materialized
+tables of User, Location, and Employer, such that any updates can re-exercise the
+join logic and emit updates for all affected Users. The final event is emitted to the
+public namespace of the organization for any downstream consumer to consume.
+The extent to which the internal data models are isolated from external consumers
+tends to become a point of contention in organizations moving toward event-driven
+66 | Chapter 4: Integrating Event-Driven Architectures with Existing Systems
+fields that are being used by downstream consumers. Similarly, you must also be careful
+when modifying the triggering logic. It is far more common to change the data
+definition than the triggering mechanism, as altering the latter often breaks the
+meaning of the original event definition.
+Using Explicit Schemas as Contracts
+The best way to enforce data contracts and provide consistency is to define a schema
+for each event. The producer defines an explicit schema detailing the data definition
+and the triggering logic, with all events of the same type adhering to this format. In
+doing so, the producer provides a mechanism for communicating its event format to
+all prospective consumers. The consumers, in turn, can confidently build their microservice
+business logic against the schematized data.
+Any implementation of event-based communication between a
+producer and consumer that lacks an explicit predefined schema
+will inevitably end up relying on an implicit schema. Implicit data
+contracts are brittle and susceptible to uncontrolled change, which
+can cause much undue hardship to downstream consumers.
+A consumer must be able to extract the data necessary for its business processes, and
+it cannot do that without having a set of expectations about what data should be
+available. Consumers must often rely on tribal knowledge and interteam communication
+to resolve data issues, a process that is not scalable as the number of event
+streams and teams increases. There is also substantial risk in requiring each consumer
+to independently interpret the data, as a consumer may interpret it differently
+than its peers, which leads to inconsistent views of the single source of truth.
+It may be tempting to build a common library that interprets any
+given event for all services, but this creates problems with multiple
+language formats, event evolutions, and independent release cycles.
+Duplicating efforts across services to ensure a consistent view of
+implicitly defined data is nontrivial and best avoided completely.
+Producers are also at a disadvantage with implicit schemas. Even with the best of
+intentions, a producer may not notice (or perhaps their unit tests don’t reveal) that
+they have altered their event data definition. Without an explicit check of their service’s
+event format, this situation may go unnoticed until it causes downstream consumers
+to fail. Explicit schemas give security and stability to both consumers and
+producers.
+40 | Chapter 3: Communication and Data Contracts
+
+Use the Narrowest Data Types
+Use the narrowest types for your event data. This lets you rely on the code generators,
+language type checking (if supported), and serialization unit tests to check the
+boundaries of your data. It sounds simple, but there are many cases where ambiguity
+can creep in when you don’t use the proper types. Here are a few easily avoidable realworld
+examples:
+Using string to store a numeric value
+This requires the consumer to parse and convert the string to a numeric value
+and often comes up with GPS coordinates. This is error prone and subject to failures,
+especially when a null value or an empty string is sent.
+Using integer as a boolean
+While 0 and 1 can be used to denote false and true, respectively, what does 2
+mean? How about -1?
+Using string as an enum
+This is problematic for producers, as they must ensure that their published values
+match an accepted pseudo-enum list. Typos and incorrect values will inevitably
+be introduced. A consumer interested in this field will need to know the range of
+possible values, and this will require talking to the producing team, unless it’s
+specified in the comments of the schema. In either case, this is an implicit definition,
+since the producers are not guarded against any changes to the range of values
+in the string. This whole approach is simply bad practice.
+Enums are often avoided because producers fear creating a new enum token that isn’t
+present in the consumer’s schema. However, the consumer has a responsibility to
+consider enum tokens that it does not recognize, and determine if it should process
+them using a default value or simply throw a fatal exception and halt processing until
+someone can work out what needs to be done. Both Protobuf and Avro have elegant
+ways of handling unknown enum tokens and should be used if either is selected for
+your event format.
+Keep Events Single-Purpose
+One common anti-pattern is adding a type field to an event definition, where different
+type values indicate specific subfeatures of the event. This is generally done for
+data that is “similar yet different” and is often a result of the implementer incorrectly
+identifying the events as single-purpose. Though it may seem like a time-saving
+measure or a simplification of a data access pattern, overloading events with type
+parameters is rarely a good idea.
+There are several problems with this approach. Each type parameter value usually
+has a fundamentally different business meaning, even if its technical representation is
+Designing Events | 47
+Converting Liberated Data to Events
+Liberated data, much like any other event, is subject to the same recommendations of
+schematization that were introduced in Chapter 3. One of the properties of a welldefined
+event stream is that there is an explicitly defined and evolutionarily compatible
+schema for the events it contains. You should ensure that consumers have basic
+data quality guarantees as part of the data contract defined by the schema. Changes to
+the schema can only be made according to evolutionary rules.
+Use the same standard format for both liberated event data and
+native event data across your organization.
+By definition, the data that is most relevant and used across the business is the data
+that is most necessary to liberate. Changes made to the data definitions of the source,
+such as creating new fields, altering existing ones, or dropping others, can result in
+dynamically changing data being propagated downstream to consumers. Failing to
+use an explicitly defined schema for liberated data will force downstream consumers
+to resolve any incompatibilities. This is extremely problematic for the provision of the
+single source of truth, as downstream consumers should not be attempting to parse
+or interpret data on their own. It is extremely important to provide a reliable and upto-
+date schema of the produced data and to carefully consider the evolution of the
+data over time.
+Data Liberation Patterns
+There are three main data liberation patterns that you can use to extract data from the
+underlying data store. Since liberated data is meant to form the new single source of
+truth, it follows that it must contain the entire set of data from the data store. Additionally,
+this data must be kept up to date with new insertions, updates, and deletes.
+Query-based
+You extract data by querying the underlying state store. This can be performed
+on any data store.
+Log-based
+You extract data by following the append-only log for changes to the underlying
+data structures. This option is available only for select data stores that maintain a
+log of the modifications made to the data.
+Table-based
+In this pattern, you first push data to a table used as an output queue. Another
+thread or separate process queries the table, emits the data to the relevant event
+Data Liberation Patterns | 57
+stream, and then deletes the associated entries. This method requires that the
+data store support both transactions and an output queue mechanism, usually a
+standalone table configured for use as a queue.
+While each pattern is unique, there is one commonality among the three. Each
+should produce its events in sorted timestamp order, using the source record’s most
+recent updated_at time in its output event record header. This will generate an event
+stream timestamped according to the event’s occurrence, not the time that the producer
+published the event. This is particularly important for data liberation, as it
+accurately represents when events actually happened in the workflow. Timestampbased
+interleaving of events is discussed further in Chapter 6.
+Data Liberation Frameworks
+One method of liberating data involves the usage of a dedicated, centralized framework
+to extract data into event streams. Examples of centralized frameworks for capturing
+event streams include Kafka Connect (exclusively for the Kafka platform),
+Apache Gobblin, and Apache NiFi. Each framework allows you to execute a query
+against the underlying data set with the results piped through to your output event
+streams. Each option is also scalable, such that you can add further instances to
+increase the capacity for executing change-data capture (CDC) jobs. They support
+various levels of integration with the schema registry offered by Confluent (Apache
+Kafka), but customization can certainly be performed to support other schema registries.
+See “Schema Registry” on page 241 for more information.
+Not all data liberation processes require a dedicated framework, and many systems
+are better suited to taking direct ownership of their own event stream data production.
+In fact, these frameworks inadvertently encourage data access anti-patterns. One
+of the most common anti-patterns is the exposure of internal data models to external
+systems, further increasing coupling instead of decreasing it, as is one of the major
+benefits of event-driven architectures. This will be covered further in the remainder
+of the chapter.
+Liberating Data by Query
+Query-based data liberation involves querying the data store and emitting selected
+results to an associated event stream. A client is used to request the specific data set
+from the data store using the appropriate API, SQL, or SQL-like language. A data set
+must be bulk-queried to provide the history of events. Periodic updates then follow,
+ensuring that changes are produced to the output event stream.
+There are several types of queries used in this pattern.
+58 | Chapter 4: Integrating Event-Driven Architectures with Existing Systems
+Bulk Loading
+Bulk loading queries and loads all of the data from the data set. Bulks loads are performed
+when the entire table needs to be loaded at each polling interval, as well as
+prior to ongoing incremental updates.
+Bulk loading can be expensive, as it requires obtaining the entire data set from the
+data store. For smaller data sets this tends not to be a problem, but large data sets,
+especially those with millions or billions of records, may be difficult to obtain. For
+querying and processing very large data sets I recommend you research best practices
+for your particular data store, since these can vary significantly with implementation.
+Incremental Timestamp Loading
+With incremental timestamp loading, you query and load all data since the highest
+timestamp of the previous query’s results. This approach uses an updated-at column
+or field in the data set that keeps track of the time when the record was last modified.
+During each incremental update, only records with updated-at timestamps later
+than the last processed time are queried.
+Autoincrementing ID Loading
+Autoincrementing ID loading involves querying and loading all data larger than the
+last value of the ID. This requires a strictly ordered autoincrementing Integer or
+Long field. During each incremental update, only records with an ID larger than the
+last processed ID are queried. This approach is often used for querying tables with
+immutable records, such as when using the outbox tables (see “Liberating Data Using
+Change-Data Capture Logs” on page 61).
+Custom Querying
+A custom query is limited only by the client querying language. This approach is
+often used when the client requires only a certain subset of data from a larger data set,
+or when joining and denormalizing data from multiple tables to avoid over-exposure
+of the internal data model. For instance, a user could filter business partner data
+according to a specific field, where each partner’s data is sent to its own event stream.
+Incremental Updating
+The first step of any incremental update is to ensure that the necessary timestamp or
+autoincrementing ID is available in the records of your data set. There must be a field
+that the query can use to filter out records it has already processed from those it has
+yet to process. Data sets that lack these fields will need to have them added, and the
+data store will need to be configured to populate the necessary updated_at
+Liberating Data by Query | 59
+Drawbacks of Query-Based Updating
+There are some downsides to query-based updating as well:
+Required updated-at timestamp
+The underlying table or namespace of events to query must have a column containing
+their updated-at timestamp. This is essential for tracking the last update
+time of the data and for making incremental updates.
+Untraceable hard deletions
+Hard deletions will not show up in the query results, so tracking deletions is limited
+to flag-based soft deletions, such as a boolean is_deleted column.
+Brittle dependency between data set schema and output event schema
+Data set schema changes may occur that are incompatible with downstream
+event format schema rules. Breakages are increasingly likely if the liberation
+mechanism is separate from the code base of the data store application, which is
+usually the case for query-based systems.
+Intermittent capture
+Data is synced only at polling intervals, and so a series of individual changes to
+the same record may only show up as a single event.
+Production resource consumption
+Queries use the underlying system resources to execute, which can cause unacceptable
+delays on a production system. This issue can be mitigated by the use of
+a read-only replica, but additional financial costs and system complexity will
+apply.
+Variable query performance due to data changes
+The quantity of data queried and returned varies depending on changes made to
+the underlying data. In the worst-case scenario, the entire body of data is changed
+each time. This can result in race conditions when a query is not finished before
+the next one starts.
+Liberating Data Using Change-Data Capture Logs
+Another pattern for liberating data is using the data store’s underlying change-data
+capture logs (binary logs in MySQL, write-ahead logs for PostgreSQL) as the source of
+information. This is an append-only data logging structure that details everything
+that has happened to the tracked data sets over time. These changes include the creation,
+deletion, and updating of individual records, as well as the creation, deletion,
+and altering of the individual data sets and their schemas.
+The technology options for change-data capture are narrower than those for querybased
+capturing. Not all data stores implement an immutable logging of changes, and
+Liberating Data Using Change-Data Capture Logs | 61
+of those that do, not all of them have off-the-shelf connectors available for extracting
+the data. This approach is mostly applicable to select relational databases, such as
+MySQL and PostgreSQL, though any data store with a set of comprehensive changelogs
+is a suitable candidate. Many other modern data stores expose event APIs that act
+as a proxy for a physical write-ahead log. For example, MongoDB provides a Change
+Streams interface, whereas Couchbase provides replication access via its internal replication
+protocol.
+The data store log is unlikely to contain all changes since the beginning of time, as it
+can be a huge amount of data and is usually not necessary to retain. You will need to
+take a snapshot of the existing data prior to starting the change-data capture process
+from the data store’s log. This snapshot usually involves a large, performanceimpacting
+query on the table and is commonly referred to as bootstrapping. You must
+ensure that there is overlap between the records in the bootstrapped query results and
+the records in the log, such that you do not accidentally miss any records.
+You must checkpoint progress when capturing events from the changelogs, though
+depending on the tooling you use, this may already be built in. In the event that the
+change-data capture mechanism fails, the checkpoint is used to restore the last stored
+changelog index. This approach can only provide at-least-once production of records,
+which tends to be suitable for the entity-based nature of data liberation. The production
+of an additional record is inconsequential since updating entity data is
+idempotent.
+There are a number of options available for sourcing data from changelogs.
+Debezium is one of the most popular choices for relational databases, as it supports
+the most common ones. Debezium can produce records to both Apache Kafka and
+Apache Pulsar with its existing implementations. Support for additional brokers is
+certainly possible, though it may require some in-house development work. Maxwell
+is another example of a binary log reader option, though it is currently limited in support
+to just MySQL databases and can produce data only to Apache Kafka.
+Figure 4-5. The end-to-end workflow of a Debezium capturing data from a MySQL
+database’s binary log, and writing it to event streams in Kafka
+62 | Chapter 4: Integrating Event-Driven Architectures with Existing Systems
+Figure 4-6. The end-to-end workflow of an outbox table CDC solution
+Figure 4-6 shows the end-to-end workflow. Updates to internal tables made by the
+data store client are wrapped in a transaction with an update to the outbox table, such
+that any failures ensures data remains consistent between the two. Meanwhile, a separate
+application thread or process is used to continually poll the outboxes and produce
+the data to the corresponding event streams. Once successfully produced, the
+corresponding records in the outbox are deleted. In the case of any failure, be it the
+data store, the consumer/producer, or the event broker itself, outbox records will still
+be retained without risk of loss. This pattern provides at-least-once delivery
+guarantees.
+Performance Considerations
+The inclusion of outbox tables introduces additional load on the data store and its
+request-handling applications. For small data stores with minimal load, the overhead
+may go completely unnoticed. Alternately, it may be quite expensive with very large
+data stores, particularly those with significant load and many tables under capture.
+The cost of this approach should be evaluated on a case-by-case basis and balanced
+against the costs of a reactive strategy such as parsing the change-data capture logs.
+Isolating Internal Data Models
+An outbox does not need to map 1:1 with an internal table. In fact, one of the major
+benefits of the outbox is that the data store client can isolate the internal data model
+from downstream consumers. The internal data model of the domain may use a
+number of highly normalized tables that are optimized for relational operations but
+are largely unsuitable for consumption by downstream consumers. Even simple
+domains may comprise multiple tables, which if exposed as independent streams,
+would require reconstruction for usage by downstream consumers. This quickly
+becomes extremely expensive in terms of operational overhead, as multiple downstream
+teams will have to reconstruct the domain model and deal with handling relational
+data in event streams.
+Liberating Data Using Outbox Tables | 65
+Exposing the internal data model to downstream consumers is an
+anti-pattern. Downstream consumers should only access data formatted
+with public-facing data contracts as described in Chapter 3.
+The data store client can instead denormalize data upon insertion time such that the
+outbox mirrors the intended public data contract, though this does come at the
+expense of additional performance and storage space. Another option is to maintain
+the 1:1 mapping of changes to output event streams and denormalize the streams
+with a downstream event processor dedicated to just this task. This is a process that I
+call eventification, as it converts highly normalized relational data into easy-toconsume
+single event updates. This mimics what the data store client could do but
+does it externally to the data store to reduce load. An example of this is shown in
+Figure 4-7, where a User is denormalized based on User, Location, and Employer.
+Figure 4-7. Eventification of public User events using private User, Location, and
+Employer event streams
+In this example, the User has a foreign-key reference to the city, state/province, and
+country they live in, as well as a foreign-key reference to their current employer. It is
+reasonable that a downstream consumer of a User event may simply want everything
+about each user in a single event, instead of being forced to materialize each stream
+into a state store and use relational tooling to denormalize it. The raw, normalized
+events are sourced from the outboxes into their own event streams, but these streams
+are kept in a private namespace from the rest of the organization (covered in “Event
+Stream Metadata Tagging” on page 240) to protect the internal data model.
+Eventification of the user is performed by denormalizing the User entity and shedding
+any internal data model structures. This process requires maintaining materialized
+tables of User, Location, and Employer, such that any updates can re-exercise the
+join logic and emit updates for all affected Users. The final event is emitted to the
+public namespace of the organization for any downstream consumer to consume.
+The extent to which the internal data models are isolated from external consumers
+tends to become a point of contention in organizations moving toward event-driven
+66 | Chapter 4: Integrating Event-Driven Architectures with Existing Systems
+fields that are being used by downstream consumers. Similarly, you must also be careful
+when modifying the triggering logic. It is far more common to change the data
+definition than the triggering mechanism, as altering the latter often breaks the
+meaning of the original event definition.
+Using Explicit Schemas as Contracts
+The best way to enforce data contracts and provide consistency is to define a schema
+for each event. The producer defines an explicit schema detailing the data definition
+and the triggering logic, with all events of the same type adhering to this format. In
+doing so, the producer provides a mechanism for communicating its event format to
+all prospective consumers. The consumers, in turn, can confidently build their microservice
+business logic against the schematized data.
+Any implementation of event-based communication between a
+producer and consumer that lacks an explicit predefined schema
+will inevitably end up relying on an implicit schema. Implicit data
+contracts are brittle and susceptible to uncontrolled change, which
+can cause much undue hardship to downstream consumers.
+A consumer must be able to extract the data necessary for its business processes, and
+it cannot do that without having a set of expectations about what data should be
+available. Consumers must often rely on tribal knowledge and interteam communication
+to resolve data issues, a process that is not scalable as the number of event
+streams and teams increases. There is also substantial risk in requiring each consumer
+to independently interpret the data, as a consumer may interpret it differently
+than its peers, which leads to inconsistent views of the single source of truth.
+It may be tempting to build a common library that interprets any
+given event for all services, but this creates problems with multiple
+language formats, event evolutions, and independent release cycles.
+Duplicating efforts across services to ensure a consistent view of
+implicitly defined data is nontrivial and best avoided completely.
+Producers are also at a disadvantage with implicit schemas. Even with the best of
+intentions, a producer may not notice (or perhaps their unit tests don’t reveal) that
+they have altered their event data definition. Without an explicit check of their service’s
+event format, this situation may go unnoticed until it causes downstream consumers
+to fail. Explicit schemas give security and stability to both consumers and
+producers.
+40 | Chapter 3: Communication and Data Contracts
+
+Use the Narrowest Data Types
+Use the narrowest types for your event data. This lets you rely on the code generators,
+language type checking (if supported), and serialization unit tests to check the
+boundaries of your data. It sounds simple, but there are many cases where ambiguity
+can creep in when you don’t use the proper types. Here are a few easily avoidable realworld
+examples:
+Using string to store a numeric value
+This requires the consumer to parse and convert the string to a numeric value
+and often comes up with GPS coordinates. This is error prone and subject to failures,
+especially when a null value or an empty string is sent.
+Using integer as a boolean
+While 0 and 1 can be used to denote false and true, respectively, what does 2
+mean? How about -1?
+Using string as an enum
+This is problematic for producers, as they must ensure that their published values
+match an accepted pseudo-enum list. Typos and incorrect values will inevitably
+be introduced. A consumer interested in this field will need to know the range of
+possible values, and this will require talking to the producing team, unless it’s
+specified in the comments of the schema. In either case, this is an implicit definition,
+since the producers are not guarded against any changes to the range of values
+in the string. This whole approach is simply bad practice.
+Enums are often avoided because producers fear creating a new enum token that isn’t
+present in the consumer’s schema. However, the consumer has a responsibility to
+consider enum tokens that it does not recognize, and determine if it should process
+them using a default value or simply throw a fatal exception and halt processing until
+someone can work out what needs to be done. Both Protobuf and Avro have elegant
+ways of handling unknown enum tokens and should be used if either is selected for
+your event format.
+Keep Events Single-Purpose
+One common anti-pattern is adding a type field to an event definition, where different
+type values indicate specific subfeatures of the event. This is generally done for
+data that is “similar yet different” and is often a result of the implementer incorrectly
+identifying the events as single-purpose. Though it may seem like a time-saving
+measure or a simplification of a data access pattern, overloading events with type
+parameters is rarely a good idea.
+There are several problems with this approach. Each type parameter value usually
+has a fundamentally different business meaning, even if its technical representation is
+Designing Events | 47
+Converting Liberated Data to Events
+Liberated data, much like any other event, is subject to the same recommendations of
+schematization that were introduced in Chapter 3. One of the properties of a welldefined
+event stream is that there is an explicitly defined and evolutionarily compatible
+schema for the events it contains. You should ensure that consumers have basic
+data quality guarantees as part of the data contract defined by the schema. Changes to
+the schema can only be made according to evolutionary rules.
+Use the same standard format for both liberated event data and
+native event data across your organization.
+By definition, the data that is most relevant and used across the business is the data
+that is most necessary to liberate. Changes made to the data definitions of the source,
+such as creating new fields, altering existing ones, or dropping others, can result in
+dynamically changing data being propagated downstream to consumers. Failing to
+use an explicitly defined schema for liberated data will force downstream consumers
+to resolve any incompatibilities. This is extremely problematic for the provision of the
+single source of truth, as downstream consumers should not be attempting to parse
+or interpret data on their own. It is extremely important to provide a reliable and upto-
+date schema of the produced data and to carefully consider the evolution of the
+data over time.
+Data Liberation Patterns
+There are three main data liberation patterns that you can use to extract data from the
+underlying data store. Since liberated data is meant to form the new single source of
+truth, it follows that it must contain the entire set of data from the data store. Additionally,
+this data must be kept up to date with new insertions, updates, and deletes.
+Query-based
+You extract data by querying the underlying state store. This can be performed
+on any data store.
+Log-based
+You extract data by following the append-only log for changes to the underlying
+data structures. This option is available only for select data stores that maintain a
+log of the modifications made to the data.
+Table-based
+In this pattern, you first push data to a table used as an output queue. Another
+thread or separate process queries the table, emits the data to the relevant event
+Data Liberation Patterns | 57
+stream, and then deletes the associated entries. This method requires that the
+data store support both transactions and an output queue mechanism, usually a
+standalone table configured for use as a queue.
+While each pattern is unique, there is one commonality among the three. Each
+should produce its events in sorted timestamp order, using the source record’s most
+recent updated_at time in its output event record header. This will generate an event
+stream timestamped according to the event’s occurrence, not the time that the producer
+published the event. This is particularly important for data liberation, as it
+accurately represents when events actually happened in the workflow. Timestampbased
+interleaving of events is discussed further in Chapter 6.
+Data Liberation Frameworks
+One method of liberating data involves the usage of a dedicated, centralized framework
+to extract data into event streams. Examples of centralized frameworks for capturing
+event streams include Kafka Connect (exclusively for the Kafka platform),
+Apache Gobblin, and Apache NiFi. Each framework allows you to execute a query
+against the underlying data set with the results piped through to your output event
+streams. Each option is also scalable, such that you can add further instances to
+increase the capacity for executing change-data capture (CDC) jobs. They support
+various levels of integration with the schema registry offered by Confluent (Apache
+Kafka), but customization can certainly be performed to support other schema registries.
+See “Schema Registry” on page 241 for more information.
+Not all data liberation processes require a dedicated framework, and many systems
+are better suited to taking direct ownership of their own event stream data production.
+In fact, these frameworks inadvertently encourage data access anti-patterns. One
+of the most common anti-patterns is the exposure of internal data models to external
+systems, further increasing coupling instead of decreasing it, as is one of the major
+benefits of event-driven architectures. This will be covered further in the remainder
+of the chapter.
+Liberating Data by Query
+Query-based data liberation involves querying the data store and emitting selected
+results to an associated event stream. A client is used to request the specific data set
+from the data store using the appropriate API, SQL, or SQL-like language. A data set
+must be bulk-queried to provide the history of events. Periodic updates then follow,
+ensuring that changes are produced to the output event stream.
+There are several types of queries used in this pattern.
+58 | Chapter 4: Integrating Event-Driven Architectures with Existing Systems
+Bulk Loading
+Bulk loading queries and loads all of the data from the data set. Bulks loads are performed
+when the entire table needs to be loaded at each polling interval, as well as
+prior to ongoing incremental updates.
+Bulk loading can be expensive, as it requires obtaining the entire data set from the
+data store. For smaller data sets this tends not to be a problem, but large data sets,
+especially those with millions or billions of records, may be difficult to obtain. For
+querying and processing very large data sets I recommend you research best practices
+for your particular data store, since these can vary significantly with implementation.
+Incremental Timestamp Loading
+With incremental timestamp loading, you query and load all data since the highest
+timestamp of the previous query’s results. This approach uses an updated-at column
+or field in the data set that keeps track of the time when the record was last modified.
+During each incremental update, only records with updated-at timestamps later
+than the last processed time are queried.
+Autoincrementing ID Loading
+Autoincrementing ID loading involves querying and loading all data larger than the
+last value of the ID. This requires a strictly ordered autoincrementing Integer or
+Long field. During each incremental update, only records with an ID larger than the
+last processed ID are queried. This approach is often used for querying tables with
+immutable records, such as when using the outbox tables (see “Liberating Data Using
+Change-Data Capture Logs” on page 61).
+Custom Querying
+A custom query is limited only by the client querying language. This approach is
+often used when the client requires only a certain subset of data from a larger data set,
+or when joining and denormalizing data from multiple tables to avoid over-exposure
+of the internal data model. For instance, a user could filter business partner data
+according to a specific field, where each partner’s data is sent to its own event stream.
+Incremental Updating
+The first step of any incremental update is to ensure that the necessary timestamp or
+autoincrementing ID is available in the records of your data set. There must be a field
+that the query can use to filter out records it has already processed from those it has
+yet to process. Data sets that lack these fields will need to have them added, and the
+data store will need to be configured to populate the necessary updated_at
+Liberating Data by Query | 59
+Drawbacks of Query-Based Updating
+There are some downsides to query-based updating as well:
+Required updated-at timestamp
+The underlying table or namespace of events to query must have a column containing
+their updated-at timestamp. This is essential for tracking the last update
+time of the data and for making incremental updates.
+Untraceable hard deletions
+Hard deletions will not show up in the query results, so tracking deletions is limited
+to flag-based soft deletions, such as a boolean is_deleted column.
+Brittle dependency between data set schema and output event schema
+Data set schema changes may occur that are incompatible with downstream
+event format schema rules. Breakages are increasingly likely if the liberation
+mechanism is separate from the code base of the data store application, which is
+usually the case for query-based systems.
+Intermittent capture
+Data is synced only at polling intervals, and so a series of individual changes to
+the same record may only show up as a single event.
+Production resource consumption
+Queries use the underlying system resources to execute, which can cause unacceptable
+delays on a production system. This issue can be mitigated by the use of
+a read-only replica, but additional financial costs and system complexity will
+apply.
+Variable query performance due to data changes
+The quantity of data queried and returned varies depending on changes made to
+the underlying data. In the worst-case scenario, the entire body of data is changed
+each time. This can result in race conditions when a query is not finished before
+the next one starts.
+Liberating Data Using Change-Data Capture Logs
+Another pattern for liberating data is using the data store’s underlying change-data
+capture logs (binary logs in MySQL, write-ahead logs for PostgreSQL) as the source of
+information. This is an append-only data logging structure that details everything
+that has happened to the tracked data sets over time. These changes include the creation,
+deletion, and updating of individual records, as well as the creation, deletion,
+and altering of the individual data sets and their schemas.
+The technology options for change-data capture are narrower than those for querybased
+capturing. Not all data stores implement an immutable logging of changes, and
+Liberating Data Using Change-Data Capture Logs | 61
+of those that do, not all of them have off-the-shelf connectors available for extracting
+the data. This approach is mostly applicable to select relational databases, such as
+MySQL and PostgreSQL, though any data store with a set of comprehensive changelogs
+is a suitable candidate. Many other modern data stores expose event APIs that act
+as a proxy for a physical write-ahead log. For example, MongoDB provides a Change
+Streams interface, whereas Couchbase provides replication access via its internal replication
+protocol.
+The data store log is unlikely to contain all changes since the beginning of time, as it
+can be a huge amount of data and is usually not necessary to retain. You will need to
+take a snapshot of the existing data prior to starting the change-data capture process
+from the data store’s log. This snapshot usually involves a large, performanceimpacting
+query on the table and is commonly referred to as bootstrapping. You must
+ensure that there is overlap between the records in the bootstrapped query results and
+the records in the log, such that you do not accidentally miss any records.
+You must checkpoint progress when capturing events from the changelogs, though
+depending on the tooling you use, this may already be built in. In the event that the
+change-data capture mechanism fails, the checkpoint is used to restore the last stored
+changelog index. This approach can only provide at-least-once production of records,
+which tends to be suitable for the entity-based nature of data liberation. The production
+of an additional record is inconsequential since updating entity data is
+idempotent.
+There are a number of options available for sourcing data from changelogs.
+Debezium is one of the most popular choices for relational databases, as it supports
+the most common ones. Debezium can produce records to both Apache Kafka and
+Apache Pulsar with its existing implementations. Support for additional brokers is
+certainly possible, though it may require some in-house development work. Maxwell
+is another example of a binary log reader option, though it is currently limited in support
+to just MySQL databases and can produce data only to Apache Kafka.
+Figure 4-5. The end-to-end workflow of a Debezium capturing data from a MySQL
+database’s binary log, and writing it to event streams in Kafka
+62 | Chapter 4: Integrating Event-Driven Architectures with Existing Systems
+Figure 4-6. The end-to-end workflow of an outbox table CDC solution
+Figure 4-6 shows the end-to-end workflow. Updates to internal tables made by the
+data store client are wrapped in a transaction with an update to the outbox table, such
+that any failures ensures data remains consistent between the two. Meanwhile, a separate
+application thread or process is used to continually poll the outboxes and produce
+the data to the corresponding event streams. Once successfully produced, the
+corresponding records in the outbox are deleted. In the case of any failure, be it the
+data store, the consumer/producer, or the event broker itself, outbox records will still
+be retained without risk of loss. This pattern provides at-least-once delivery
+guarantees.
+Performance Considerations
+The inclusion of outbox tables introduces additional load on the data store and its
+request-handling applications. For small data stores with minimal load, the overhead
+may go completely unnoticed. Alternately, it may be quite expensive with very large
+data stores, particularly those with significant load and many tables under capture.
+The cost of this approach should be evaluated on a case-by-case basis and balanced
+against the costs of a reactive strategy such as parsing the change-data capture logs.
+Isolating Internal Data Models
+An outbox does not need to map 1:1 with an internal table. In fact, one of the major
+benefits of the outbox is that the data store client can isolate the internal data model
+from downstream consumers. The internal data model of the domain may use a

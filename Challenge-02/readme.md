@@ -80,7 +80,7 @@ python server.py
 
 2. Run the client with a file:
 ```bash
-python client.py test_files/your_file.txt
+python client.py test_files/client1.txt
 ```
 
 The system will:
